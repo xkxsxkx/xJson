@@ -4,6 +4,11 @@
 #include <stdlib.h>
 #include <iostream>
 
+using xJson::xValue;
+using xJson::xState;
+using xJson::xType;
+using xJson::xHelper;
+
 #ifndef X_PARSE_STACK_INIT_SIZE
 #define X_PARSE_STACK_INIT_SIZE 256
 #endif
@@ -13,50 +18,45 @@
 #define ISDIGIT1TO9(ch) ((ch) >= '1' && (ch) <= '9')
 
 #define xSetNull(v) xFree(v)
-#define xInit(v) do { (v)->type = xType::X_TYPE_NULL; } while (0)
-
-using xJson::xValue;
-using xJson::xState;
-using xJson::xType;
-using xJson::xHelper;
 
 typedef struct {
     const char* json;
     char* stack;
     size_t size, top;
-    /**
-     * @brief expend memory.
-     * @param c context which need to expand
-     * @param size extend value
-     * @return void* 
-     */
-    static void* xContextPush(xContext* c, size_t size) {
-        void* ret;
-        assert(size > 0);
-        if (c->top + size >= c->size) {
-            if (c->size == 0)
-                c->size = X_PARSE_STACK_INIT_SIZE;
-            while (c->top + size >= c->size)
-                c->size += c->size >> 1;
-            c->stack = (char*)realloc(c->stack, c->size);
-        }
-        ret = c->stack + c->top;
-        c->top += size;
-        return ret;
-    }
-    /**
-     * @brief reduce memory
-     * @param c context
-     * @param size 
-     * @return void* 
-     */
-    static void* xContextPop(xContext* c, size_t size) {
-        assert(c->top >= size);
-        return c->stack + (c->top -= size);
-    }
 } xContext;
 
-#define PUTC(c, ch) do { *(char*)xContext::xContextPush(c, sizeof(char)) = (ch); } while (0)
+/**
+ * @brief expend memory.
+ * @param c context which need to expand
+ * @param size extend value
+ * @return void* 
+ */
+void* xContextPush(xContext* c, size_t size) {
+    void* ret;
+    assert(size > 0);
+    if (c->top + size >= c->size) {
+        if (c->size == 0)
+            c->size = X_PARSE_STACK_INIT_SIZE;
+        while (c->top + size >= c->size)
+            c->size += c->size >> 1;
+        c->stack = (char*)realloc(c->stack, c->size);
+    }
+    ret = c->stack + c->top;
+    c->top += size;
+    return ret;
+}
+/**
+ * @brief reduce memory
+ * @param c context
+ * @param size 
+ * @return void* 
+ */
+void* xContextPop(xContext* c, size_t size) {
+    assert(c->top >= size);
+    return c->stack + (c->top -= size);
+}
+
+#define PUTC(c, ch) do { *(char*)xContextPush(c, sizeof(char)) = (ch); } while (0)
 
 class xParse {
  public:
@@ -146,7 +146,7 @@ class xParse {
             case '\"':
                 len = c->top - head;
                 xHelper::xSetString(v,
-                    (const char*)xContext::xContextPop(c, len), len);
+                    (const char*)xContextPop(c, len), len);
                 c->json = p;
                 return xState::X_PARSE_OK;
             case '\0':
@@ -174,7 +174,10 @@ xState xJson::xParse(xValue* v, const char* json) {
     xState ret;
     assert(v != nullptr);
     c.json = json;
+    c.stack = nullptr;
     v->type = xType::X_TYPE_NULL;
+    c.size = c.top = 0;
+    xInit(v);
     xParse::parseWhiteSpace(&c);
     if ((ret = xParse::parseValue(v, &c)) == xState::X_PARSE_OK) {
         xParse::parseWhiteSpace(&c);
@@ -183,14 +186,25 @@ xState xJson::xParse(xValue* v, const char* json) {
             ret = xState::X_PARSE_ROOT_NOT_SINGULAR;
         }
     }
+    assert(c.top == 0);
+    free(c.stack);
     return ret;
 }
 
-void xFree(xValue* v) {
+void xJson::xFree(xValue* v) {
     assert(v != nullptr);
     if (v->type == xType::X_TYPE_STRING)
         free(v->str.s);
     v->type = xType::X_TYPE_NULL;
+}
+
+xHelper::xHelper(xValue* v) {
+    this->value = v;
+    xInit(this->value);
+}
+
+xHelper::~xHelper() {
+    xFree(this->value);
 }
 
 xType xHelper::xGetType(const xValue* v) {
@@ -200,11 +214,15 @@ xType xHelper::xGetType(const xValue* v) {
 
 int xHelper::xGetBoolean(const xValue* v) {
     /* \TODO */
-    return 0;
+    assert(v != nullptr
+        && (v->type == xType::X_TYPE_TRUE
+        || v->type == xType::X_TYPE_FALSE));
+    return v->type == xType::X_TYPE_TRUE;
 }
 
 void xHelper::xSetBoolean(xValue* v, int b) {
-    /* \TODO */
+    xFree(v);
+    v->type = b ? xType::X_TYPE_TRUE : xType::X_TYPE_FALSE;
 }
 
 double xHelper::xGetNumber(const xValue* v) {
@@ -213,7 +231,9 @@ double xHelper::xGetNumber(const xValue* v) {
 }
 
 void xHelper::xSetNumber(xValue* v, double n) {
-    /* \TODO */
+    xFree(v);
+    v->n = n;
+    v->type = xType::X_TYPE_NUMBER;
 }
 
 const char* xHelper::xGetString(const xValue* v) {
@@ -228,4 +248,10 @@ size_t xHelper::xGetStringLength(const xValue* v) {
 
 void xHelper::xSetString(xValue* v, const char* s, size_t len) {
     assert(v != nullptr && (s != nullptr || len == 0));
+    xFree(v);
+    v->str.s = (char*)malloc(len + 1);
+    memcpy(v->str.s, s, len);
+    v->str.s[len] = '\0';
+    v->str.len = len;
+    v->type = xType::X_TYPE_STRING;
 }

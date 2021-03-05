@@ -46,8 +46,14 @@ xState xParse(xValue* v, const char* json);
  */
 void xFree(xValue* v);
 
+#define xInit(v) do { (v)->type = xType::X_TYPE_NULL; } while (0)
 class xHelper {
+ private:
+    xValue* value;
+
  public:
+    explicit xHelper(xValue* v);
+    ~xHelper();
     /** @fn xType xGetType(const xValue* v)
      * @brief get type of value.
      * @param v the value which need be judge type.
