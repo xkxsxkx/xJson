@@ -14,6 +14,10 @@ using xJson::xMember;
 #define X_PARSE_STACK_INIT_SIZE 256
 #endif
 
+#ifndef X_PARSE_STRINGIFY_INIT_SIZE
+#define X_PARSE_STRINGIFY_INIT_SIZE 256
+#endif
+
 #define EXPECT(c, ch) do { assert(*c->json == (ch)); c->json++;} while (0)
 #define ISDIGIT(ch) ((ch) >= '0' && (ch) <= '9')
 #define ISDIGIT1TO9(ch) ((ch) >= '1' && (ch) <= '9')
@@ -87,6 +91,7 @@ void* xContextPop(xContext* c, size_t size) {
 }
 
 #define PUTC(c, ch) do { *(char*)xContextPush(c, sizeof(char)) = (ch); } while (0)
+#define PUTS(c, s, len) memcpy(xContextPush(c, len), s, len)
 
 class xParse {
  public:
@@ -412,6 +417,95 @@ xState xJson::xParse(xValue* v, const char* json) {
     return ret;
 }
 
+class xStringify {
+ public:
+    xStringify() {}
+    static void stringifyString(xContext* c, const char* s, size_t len) {
+        static const char hex_digits[] = {
+            '0', '1', '2', '3', '4',
+            '5', '6', '7', '8', '9',
+            'A', 'B', 'C', 'D', 'E', 'F' };
+        size_t i, size;
+        char* head, *p;
+        assert(s != NULL);
+        p = head = (char*)xContextPush(c, size = len * 6 + 2);
+        /* "\u00xx..." */
+        *p++ = '"';
+        for (i = 0; i < len; i++) {
+            unsigned char ch = (unsigned char)s[i];
+            switch (ch) {
+                case '\"': *p++ = '\\'; *p++ = '\"'; break;
+                case '\\': *p++ = '\\'; *p++ = '\\'; break;
+                case '\b': *p++ = '\\'; *p++ = 'b';  break;
+                case '\f': *p++ = '\\'; *p++ = 'f';  break;
+                case '\n': *p++ = '\\'; *p++ = 'n';  break;
+                case '\r': *p++ = '\\'; *p++ = 'r';  break;
+                case '\t': *p++ = '\\'; *p++ = 't';  break;
+                default:
+                    if (ch < 0x20) {
+                        *p++ = '\\';
+                        *p++ = 'u';
+                        *p++ = '0';
+                        *p++ = '0';
+                        *p++ = hex_digits[ch >> 4];
+                        *p++ = hex_digits[ch & 15];
+                    } else {
+                        *p++ = s[i];
+                    }
+            }
+        }
+        *p++ = '"';
+        c->top -= size - (p - head);
+    }
+    static void stringifyValue(xContext* c, const xValue* v) {
+        size_t i;
+        switch (v->type) {
+            case xType::X_TYPE_NULL:   PUTS(c, "null",  4); break;
+            case xType::X_TYPE_FALSE:  PUTS(c, "false", 5); break;
+            case xType::X_TYPE_TRUE:   PUTS(c, "true",  4); break;
+            case xType::X_TYPE_NUMBER:
+                c->top -= 32 - sprintf((char*)xContextPush(c, 32), "%.17g", v->n);
+                break;
+            case xType::X_TYPE_STRING:
+                stringifyString(c, v->str.s, v->str.len);
+                break;
+            case xType::X_TYPE_ARRAY:
+                PUTC(c, '[');
+                for (i = 0; i < v->array.len; i++) {
+                    if (i > 0)
+                        PUTC(c, ',');
+                    stringifyValue(c, &v->array.e[i]);
+                }
+                PUTC(c, ']');
+                break;
+            case xType::X_TYPE_OBJECT:
+                PUTC(c, '{');
+                for (i = 0; i < v->object.size; i++) {
+                    if (i > 0)
+                        PUTC(c, ',');
+                    stringifyString(c, v->object.m[i].k,
+                        v->object.m[i].klen);
+                    PUTC(c, ':');
+                    stringifyValue(c, &v->object.m[i].v);
+                }
+                PUTC(c, '}');
+                break;
+            default: assert(0 && "invalid type");
+        }
+    }
+};
+
+char* xJson::xStringify(const xValue* v, size_t* length) {
+    xContext c;
+    assert(v != nullptr);
+    c.stack = (char*)malloc(c.size = X_PARSE_STRINGIFY_INIT_SIZE);
+    c.top = 0;
+    xStringify::stringifyValue(&c, v);
+    if (length)
+        *length = c.top;
+    PUTC(&c, '\0');
+    return c.stack;
+}
 
 xHelper::xHelper(xValue* v) {
     this->value = v;

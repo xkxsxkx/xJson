@@ -62,6 +62,8 @@ struct xMember {
 */
 xState xParse(xValue* v, const char* json);
 
+char* xStringify(const xValue* v, size_t* length);
+
 class xHelper {
  private:
     xValue* value;
