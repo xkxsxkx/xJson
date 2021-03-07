@@ -17,7 +17,29 @@ using xJson::xHelper;
 #define ISDIGIT(ch) ((ch) >= '0' && (ch) <= '9')
 #define ISDIGIT1TO9(ch) ((ch) >= '1' && (ch) <= '9')
 
-#define xSetNull(v) xFree(v)
+/** @fn void xFree(xValue* v)
+ * @brief 
+ * @param v 
+ */
+static void xFree(xValue* v) {
+    size_t i;
+    assert(v != nullptr);
+    switch (v->type) {
+        case xType::X_TYPE_STRING:
+            free(v->str.s);
+            break;
+        case xType::X_TYPE_ARRAY:
+            for(i = 0; i < v->array.len; i++)
+                xFree(&v->array.e[i]);
+            free(v->array.e);
+            break;
+        default: break;
+    }
+    v->type = xType::X_TYPE_NULL;
+}
+
+// #define xSetNull(v) xFree(v)
+#define xInit(v) do { (v)->type = xType::X_TYPE_NULL; } while (0)
 
 typedef struct {
     const char* json;
@@ -135,8 +157,41 @@ class xParse {
         v->type = xType::X_TYPE_NUMBER;
         return xState::X_PARSE_OK;
     }
+    static const char* parseHex4(const char* p, unsigned* u) {
+        int i;
+        *u = 0;
+        for (i = 0; i < 4; i++) {
+            char ch = *p++;
+            *u <<= 4;
+            if (ch >= '0' && ch <= '9') *u |= ch - '0';
+            else if (ch >= 'A' && ch <= 'F') *u |= ch - ('A' - 10);
+            else if (ch >= 'a' && ch <= 'f') *u |= ch - ('a' - 10);
+            else return nullptr;
+        }
+        return p;
+    }
+    static void encodeUtf8(xContext* c, unsigned u) {
+        if (u <= 0x7F)
+            PUTC(c, u & 0xFF);
+        else if (u <= 0x7FF) {
+            PUTC(c, 0xC0 | ((u >> 6) & 0xFF));
+            PUTC(c, 0x80 | (u & 0x3F));
+        } else if (u <= 0xFFFF) {
+            PUTC(c, 0xE0 | (u >> 12) & 0xFF);
+            PUTC(c, 0x80 | (u >> 6) & 0x3F);
+            PUTC(c, 0x80 | (u & 0x3F));
+        } else {
+            assert(u <= 0x10FFFF);
+            PUTC(c, 0xF0 | ((u >> 18) & 0xFF));
+            PUTC(c, 0x80 | ((u >> 12) & 0x3F));
+            PUTC(c, 0x80 | ((u >> 6) & 0x3F));
+            PUTC(c, 0x80 | (u & 0x3F));
+        }
+    }
+    #define STRING_ERROR(ret) do {c->top = head; return ret; } while (0)
     static xState parseString(xContext* c, xValue* v) {
         size_t head = c->top, len;
+        unsigned u, u2;
         const char* p;
         EXPECT(c, '\"');
         p = c->json;
@@ -149,21 +204,102 @@ class xParse {
                     (const char*)xContextPop(c, len), len);
                 c->json = p;
                 return xState::X_PARSE_OK;
+            case '\\':
+                switch (*p++) {
+                    case '\"': PUTC(c, '\"'); break;
+                    case '\\': PUTC(c, '\\'); break;
+                    case '/': PUTC(c, '/'); break;
+                    case 'b': PUTC(c, '\b'); break;
+                    case 'f': PUTC(c, '\f'); break;
+                    case 'n': PUTC(c, '\n'); break;
+                    case 'r': PUTC(c, '\r'); break;
+                    case 't': PUTC(c, '\t'); break;
+                    case 'u':
+                        if (!(p = xParse::parseHex4(p, &u)))
+                            STRING_ERROR(xState::X_PARSE_INVALID_UNICODE_HEX);
+                        if (u >= 0xD800 && u <= 0xDBFF) {
+                            if (*p++ != '\\')
+                                STRING_ERROR(
+                                    xState::X_PARSE_INVALID_UNICODE_SURROGATE);
+                            if (*p++ != 'u')
+                                STRING_ERROR(
+                                    xState::X_PARSE_INVALID_UNICODE_SURROGATE);
+                            if (!(p = xParse::parseHex4(p, &u2)))
+                                STRING_ERROR(
+                                    xState::X_PARSE_INVALID_UNICODE_HEX);
+                            if (u2 < 0xDC00 || u2 > 0xDFFF)
+                                STRING_ERROR(
+                                    xState::X_PARSE_INVALID_UNICODE_SURROGATE);
+                            u = (((u - 0xD800) << 10) | (u2 - 0xDC00))
+                                + 0x10000;
+                        }
+                        xParse::encodeUtf8(c, u);
+                        break;
+                    default:
+                        STRING_ERROR(xState::X_PARSE_INVALID_STRING_ESCAPE);
+                }
+                break;
             case '\0':
-                c->top = head;
-                return xState::X_PARSE_MISS_QUOTATION_MARK;
+                STRING_ERROR(xState::X_PARSE_MISS_QUOTATION_MARK);
             default:
+                if ((unsigned char)ch < 0x20) {
+                    STRING_ERROR(xState::X_PARSE_INVALID_STRING_CHAR);
+                }
                 PUTC(c, ch);
             }
         }
     }
+    static xState parseArray(xContext* c, xValue* v) {
+        size_t i, size = 0;
+        xState ret;
+        EXPECT(c, '[');
+        parseWhiteSpace(c);
+        if (*c->json == ']') {
+            c->json++;
+            v->type = xType::X_TYPE_ARRAY;
+            v->array.len = 0;
+            v->array.e = nullptr;
+            return xState::X_PARSE_OK;
+        }
+        for (;;) {
+            xValue e;
+            xInit(&e);
+            if ((ret = parseValue(&e, c)) != xState::X_PARSE_OK)
+                break;
+            memcpy(xContextPush(c, sizeof(xValue)), &e, sizeof(xValue));
+            size++;
+            parseWhiteSpace(c);
+            if (*c->json == ',') {
+                c->json++;
+                parseWhiteSpace(c);
+            } else if (*c->json == ']') {
+                c->json++;
+                v->type == xType::X_TYPE_ARRAY;
+                v->array.len = size;
+                size *= sizeof(xValue);
+                memcpy(v->array.e = (xValue*)malloc(size),
+                    xContextPop(c, size), size);
+                return xState::X_PARSE_OK;
+            } else {
+                ret = xState::X_PARSE_MISS_COMMA_OR_SQUARE_BRACKET;
+                break;
+            }
+        }
+        for (i = 0; i < size; i++)
+            xFree((xValue*)xContextPop(c, sizeof(xValue)));
+        return ret;
+    }
     static xState parseValue(xValue* v, xContext* c) {
         switch (*c->json) {
-            case 't': return xParse::parseTrue(c, v);
-            case 'f': return xParse::parseFalse(c, v);
-            case 'n': return xParse::parseNull(c, v);
+            case 't': return xParse::parseLiteral(c, v,
+                "true", xType::X_TYPE_TRUE);
+            case 'f': return xParse::parseLiteral(c, v,
+                "false", xType::X_TYPE_FALSE);
+            case 'n': return xParse::parseLiteral(c, v,
+                "null", xType::X_TYPE_NULL);
             default: return xParse::parseNumber(c, v);
             case '"': return xParse::parseString(c, v);
+            case '[': return xParse::parseArray(c, v);
             case '\0': return xState::X_PARSE_EXPECT_VALUE;
         }
     }
@@ -191,12 +327,6 @@ xState xJson::xParse(xValue* v, const char* json) {
     return ret;
 }
 
-void xJson::xFree(xValue* v) {
-    assert(v != nullptr);
-    if (v->type == xType::X_TYPE_STRING)
-        free(v->str.s);
-    v->type = xType::X_TYPE_NULL;
-}
 
 xHelper::xHelper(xValue* v) {
     this->value = v;
@@ -205,6 +335,10 @@ xHelper::xHelper(xValue* v) {
 
 xHelper::~xHelper() {
     xFree(this->value);
+}
+
+void xHelper::xSetNull(xValue* v) {
+    xFree(v);
 }
 
 xType xHelper::xGetType(const xValue* v) {
@@ -254,4 +388,15 @@ void xHelper::xSetString(xValue* v, const char* s, size_t len) {
     v->str.s[len] = '\0';
     v->str.len = len;
     v->type = xType::X_TYPE_STRING;
+}
+
+size_t xHelper::xGetArraySize(const xValue* v) {
+    assert(v != nullptr && v->type == xType::X_TYPE_ARRAY);
+    return v->array.len;
+}
+
+xValue* xHelper::xGetArrayElement(const xValue* v, size_t index) {
+    assert(v != nullptr && v->type == xType::X_TYPE_ARRAY);
+    assert(index < v->array.len);
+    return &v->array.e[index];
 }

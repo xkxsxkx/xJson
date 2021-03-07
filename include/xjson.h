@@ -18,19 +18,26 @@ enum class xState {
     X_PARSE_NUMBER_TOO_BIG,
     X_PARSE_MISS_QUOTATION_MARK,
     X_PARSE_INVALID_STRING_ESCAPE,
-    X_PARSE_INVALID_STRING_CHAR
+    X_PARSE_INVALID_STRING_CHAR,
+    X_PARSE_INVALID_UNICODE_HEX,
+    X_PARSE_INVALID_UNICODE_SURROGATE,
+    X_PARSE_MISS_COMMA_OR_SQUARE_BRACKET
 };
 
-typedef struct {
+struct xValue{
     union {
         struct {
             char* s;
             size_t len;
         } str;
+        struct {
+            xValue* e;
+            size_t len;
+        } array;
         double n;
     };
     xType type;
-} xValue;
+};
 
 /** @fn int xParse(xValue* v, const char* json)
  * @brief parse json to get corresponding value.
@@ -40,13 +47,6 @@ typedef struct {
 */
 xState xParse(xValue* v, const char* json);
 
-/** @fn void xFree(xValue* v)
- * @brief 
- * @param v 
- */
-void xFree(xValue* v);
-
-#define xInit(v) do { (v)->type = xType::X_TYPE_NULL; } while (0)
 class xHelper {
  private:
     xValue* value;
@@ -54,6 +54,12 @@ class xHelper {
  public:
     explicit xHelper(xValue* v);
     ~xHelper();
+    /**
+     * @brief 
+     * 
+     * @param v 
+     */
+    static void xSetNull(xValue* v);
     /** @fn xType xGetType(const xValue* v)
      * @brief get type of value.
      * @param v the value which need be judge type.
@@ -98,6 +104,10 @@ class xHelper {
     static size_t xGetStringLength(const xValue* v);
 
     static void xSetString(xValue* v, const char* s, size_t len);
+
+    static size_t xGetArraySize(const xValue* v);
+
+    xValue* xGetArrayElement(const xValue* v, size_t index);
 };
 }  // namespace xJson
 
