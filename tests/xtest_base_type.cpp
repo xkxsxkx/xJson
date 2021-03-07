@@ -28,6 +28,12 @@ static int test_pass = 0;
 #define EXPECT_TRUE(actual) EXPECT_EQ_BASE((actual) != 0, "true", "false", "%s")
 #define EXPECT_FALSE(actual) EXPECT_EQ_BASE((actual) == 0, "false", "true", "%s")
 
+#if defined(_MSC_VER)
+#define EXPECT_EQ_SIZE_T(expect, actual) EXPECT_EQ_BASE((expect) == (actual), (size_t)expect, (size_t)actual, "%Iu")
+#else
+#define EXPECT_EQ_SIZE_T(expect, actual) EXPECT_EQ_BASE((expect) == (actual), (size_t)expect, (size_t)actual, "%zu")
+#endif
+
 static void test_parse_null() {
     xValue v;
     // xInit(&v);
@@ -115,6 +121,59 @@ static void test_parse_string() {
     TEST_STRING("\" \\ / \b \f \n \r \t",
         "\"\\\" \\\\ \\/ \\b \\f \\n \\r \\t\"");
 #endif
+}
+
+static void test_parse_array() {
+    size_t i, j;
+    xValue v;
+
+    {
+        xHelper h(&v);
+        EXPECT_EQ_INT(xState::X_PARSE_OK, xParse(&v, "[ ]"));
+        EXPECT_EQ_INT(xType::X_TYPE_ARRAY, h.xGetType(&v));
+        EXPECT_EQ_SIZE_T(0, h.xGetArraySize(&v));
+    }
+
+    {
+        xHelper h(&v);
+        EXPECT_EQ_INT(xState::X_PARSE_OK,
+            xParse(&v, "[ null , false , true , 123 , \"abc\" ]"));
+        EXPECT_EQ_INT(xType::X_TYPE_ARRAY, h.xGetType(&v));
+        EXPECT_EQ_SIZE_T(5, h.xGetArraySize(&v));
+        EXPECT_EQ_INT(xType::X_TYPE_NULL,
+            h.xGetType(h.xGetArrayElement(&v, 0)));
+        EXPECT_EQ_INT(xType::X_TYPE_FALSE,
+            h.xGetType(h.xGetArrayElement(&v, 1)));
+        EXPECT_EQ_INT(xType::X_TYPE_TRUE,
+            h.xGetType(h.xGetArrayElement(&v, 2)));
+        EXPECT_EQ_INT(xType::X_TYPE_NUMBER,
+            h.xGetType(h.xGetArrayElement(&v, 3)));
+        EXPECT_EQ_INT(xType::X_TYPE_STRING,
+            h.xGetType(h.xGetArrayElement(&v, 4)));
+        EXPECT_EQ_DOUBLE(123.0,
+            h.xGetNumber(h.xGetArrayElement(&v, 3)));
+        EXPECT_EQ_STRING("abc",
+            h.xGetString(h.xGetArrayElement(&v, 4)),
+            h.xGetStringLength(h.xGetArrayElement(&v, 4)));
+    }
+
+    {
+        xHelper h(&v);
+        EXPECT_EQ_INT(xState::X_PARSE_OK,
+            xParse(&v, "[ [ ] , [ 0 ] , [ 0 , 1 ] , [ 0 , 1 , 2 ] ]"));
+        EXPECT_EQ_INT(xType::X_TYPE_ARRAY, h.xGetType(&v));
+        EXPECT_EQ_SIZE_T(4, h.xGetArraySize(&v));
+        for (i = 0; i < 4; i++) {
+            xValue* a = h.xGetArrayElement(&v, i);
+            EXPECT_EQ_INT(xType::X_TYPE_ARRAY, h.xGetType(a));
+            EXPECT_EQ_SIZE_T(i, h.xGetArraySize(a));
+            for (j = 0; j < i; j++) {
+                xValue* e = h.xGetArrayElement(a, j);
+                EXPECT_EQ_INT(xType::X_TYPE_NUMBER, h.xGetType(e));
+                EXPECT_EQ_DOUBLE((double)j, h.xGetNumber(e));
+            }
+        }
+    }
 }
 
 #define TEST_ERROR(error, json)\
@@ -238,6 +297,13 @@ static void test_parse_invalid_unicode_surrogate() {
     TEST_ERROR(xState::X_PARSE_INVALID_UNICODE_SURROGATE, "\"\\uD800\\uE000\"");
 }
 
+static void test_parse_miss_comma_or_square_bracket() {
+    TEST_ERROR(xState::X_PARSE_MISS_COMMA_OR_SQUARE_BRACKET, "[1");
+    TEST_ERROR(xState::X_PARSE_MISS_COMMA_OR_SQUARE_BRACKET, "[1}");
+    TEST_ERROR(xState::X_PARSE_MISS_COMMA_OR_SQUARE_BRACKET, "[1 2");
+    TEST_ERROR(xState::X_PARSE_MISS_COMMA_OR_SQUARE_BRACKET, "[[]");
+}
+
 static void test_parse() {
     test_parse_null();
     test_parse_true();
@@ -253,6 +319,7 @@ static void test_parse() {
     test_parse_invalid_string_char();
     test_parse_invalid_unicode_hex();
     test_parse_invalid_unicode_surrogate();
+    test_parse_miss_comma_or_square_bracket();
 
     test_access_null();
     test_access_boolean();
