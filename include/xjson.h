@@ -21,9 +21,14 @@ enum class xState {
     X_PARSE_INVALID_STRING_CHAR,
     X_PARSE_INVALID_UNICODE_HEX,
     X_PARSE_INVALID_UNICODE_SURROGATE,
-    X_PARSE_MISS_COMMA_OR_SQUARE_BRACKET
+    X_PARSE_MISS_COMMA_OR_SQUARE_BRACKET,
+    X_PARSE_MISS_KEY,
+    X_PARSE_MISS_COLON,
+    X_PARSE_MISS_COMMA_OR_CURLY_BRACKET
 };
 
+typedef struct xMember xMember;
+typedef struct xValue xValue;
 struct xValue{
     union {
         struct {
@@ -34,9 +39,19 @@ struct xValue{
             xValue* e;
             size_t len;
         } array;
+        struct {
+            xMember* m;
+            size_t size;
+        } object;
         double n;
     };
     xType type;
+};
+
+struct xMember {
+    char* k;
+    size_t klen;
+    xValue v;
 };
 
 /** @fn int xParse(xValue* v, const char* json)
@@ -108,6 +123,11 @@ class xHelper {
     static size_t xGetArraySize(const xValue* v);
 
     xValue* xGetArrayElement(const xValue* v, size_t index);
+
+    size_t xGetObjectSize(const xValue* v);
+    const char* xGetObjectKey(const xValue* v, size_t index);
+    size_t xGetObjectKeyLength(const xValue* v, size_t index);
+    xValue* xGetObjectValue(const xValue* v, size_t index);
 };
 }  // namespace xJson
 

@@ -8,6 +8,7 @@ using xJson::xValue;
 using xJson::xState;
 using xJson::xType;
 using xJson::xHelper;
+using xJson::xMember;
 
 #ifndef X_PARSE_STACK_INIT_SIZE
 #define X_PARSE_STACK_INIT_SIZE 256
@@ -29,9 +30,16 @@ static void xFree(xValue* v) {
             free(v->str.s);
             break;
         case xType::X_TYPE_ARRAY:
-            for(i = 0; i < v->array.len; i++)
+            for (i = 0; i < v->array.len; i++)
                 xFree(&v->array.e[i]);
             free(v->array.e);
+            break;
+        case xType::X_TYPE_OBJECT:
+            for (i = 0; i < v->object.size; i++) {
+                free(v->object.m[i].k);
+                xFree(&v->object.m[i].v);
+            }
+            free(v->object.m);
             break;
         default: break;
     }
@@ -189,8 +197,8 @@ class xParse {
         }
     }
     #define STRING_ERROR(ret) do {c->top = head; return ret; } while (0)
-    static xState parseString(xContext* c, xValue* v) {
-        size_t head = c->top, len;
+    static xState parseStringRaw(xContext* c, char** str, size_t* len) {
+        size_t head = c->top;
         unsigned u, u2;
         const char* p;
         EXPECT(c, '\"');
@@ -199,9 +207,12 @@ class xParse {
             char ch = *p++;
             switch (ch) {
             case '\"':
-                len = c->top - head;
+                *len = c->top - head;
+                *str = (char*)xContextPop(c, *len);
+                /*
                 xHelper::xSetString(v,
                     (const char*)xContextPop(c, len), len);
+                */
                 c->json = p;
                 return xState::X_PARSE_OK;
             case '\\':
@@ -249,6 +260,14 @@ class xParse {
             }
         }
     }
+    static xState parseString(xContext* c, xValue* v) {
+        xState ret;
+        char* s;
+        size_t len;
+        if ((ret = parseStringRaw(c, &s, &len)) == xState::X_PARSE_OK)
+            xHelper::xSetString(v, s, len);
+        return ret;
+    }
     static xState parseArray(xContext* c, xValue* v) {
         size_t i, size = 0;
         xState ret;
@@ -289,6 +308,71 @@ class xParse {
             xFree((xValue*)xContextPop(c, sizeof(xValue)));
         return ret;
     }
+    static xState parseObject(xContext* c, xValue* v) {
+        size_t i, size;
+        xMember m;
+        xState ret;
+        EXPECT(c, '{');
+        parseWhiteSpace(c);
+        if (*c->json == '}') {
+            c->json++;
+            v->type = xType::X_TYPE_OBJECT;
+            v->object.m = 0;
+            v->object.size = 0;
+            return xState::X_PARSE_OK;
+        }
+        m.k = nullptr;
+        size = 0;
+        for (;;) {
+            char* str;
+            xInit(&m.v);
+            if (*c->json != '"') {
+                ret = xState::X_PARSE_MISS_KEY;
+                break;
+            }
+            if ((ret = xParse::parseStringRaw(c, &str, &m.klen))
+                != xState::X_PARSE_OK)
+                break;
+            memcpy(m.k = (char*)malloc(m.klen + 1), str, m.klen);
+            m.k[m.klen] = '\0';
+            parseWhiteSpace(c);
+            if (*c->json != ':') {
+                ret = xState::X_PARSE_MISS_COLON;
+                break;
+            }
+            c->json++;
+            parseWhiteSpace(c);
+            if ((ret = parseValue(&m.v, c)) != xState::X_PARSE_OK)
+                break;
+            memcpy(xContextPush(c, sizeof(xMember)), &m, sizeof(xMember));
+            size++;
+            m.k = nullptr;
+            parseWhiteSpace(c);
+            if (*c->json == ',') {
+                c->json++;
+                parseWhiteSpace(c);
+            } else if (*c->json == '}') {
+                size_t s = sizeof(xMember) * size;
+                c->json++;
+                v->type = xType::X_TYPE_OBJECT;
+                v->object.size = size;
+                memcpy(v->object.m = (xMember*)malloc(s),
+                    xContextPop(c, s), s);
+                return xState::X_PARSE_OK;
+            } else {
+                ret = xState::X_PARSE_MISS_COMMA_OR_CURLY_BRACKET;
+                break;
+            }
+        }
+        free(m.k);
+        for (i = 0; i < size; i++) {
+            xMember* m = (xMember*)xContextPop(c, sizeof(xMember));
+            free(m->k);
+            xFree(&m->v);
+        }
+        v->type = xType::X_TYPE_NULL;
+        return ret;
+    }
     static xState parseValue(xValue* v, xContext* c) {
         switch (*c->json) {
             case 't': return xParse::parseLiteral(c, v,
@@ -300,6 +384,7 @@ class xParse {
             default: return xParse::parseNumber(c, v);
             case '"': return xParse::parseString(c, v);
             case '[': return xParse::parseArray(c, v);
+            case '{': return xParse::parseObject(c, v);
             case '\0': return xState::X_PARSE_EXPECT_VALUE;
         }
     }
@@ -399,4 +484,27 @@ xValue* xHelper::xGetArrayElement(const xValue* v, size_t index) {
     assert(v != nullptr && v->type == xType::X_TYPE_ARRAY);
     assert(index < v->array.len);
     return &v->array.e[index];
+}
+
+size_t xHelper::xGetObjectSize(const xValue* v) {
+    assert(v != nullptr && v->type == xType::X_TYPE_OBJECT);
+    return v->object.size;
+}
+
+const char* xHelper::xGetObjectKey(const xValue* v, size_t index) {
+    assert(v != nullptr && v->type == xType::X_TYPE_OBJECT);
+    assert(index < v->object.size);
+    return v->object.m[index].k;
+}
+
+size_t xHelper::xGetObjectKeyLength(const xValue* v, size_t index) {
+    assert(v != nullptr && v->type == xType::X_TYPE_OBJECT);
+    assert(index < v->object.size);
+    return v->object.m[index].klen;
+}
+
+xValue* xHelper::xGetObjectValue(const xValue* v, size_t index) {
+    assert(v != nullptr && v->type == xType::X_TYPE_OBJECT);
+    assert(index < v->object.size);
+    return &v->object.m[index].v;
 }
