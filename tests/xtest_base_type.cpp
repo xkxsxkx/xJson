@@ -176,6 +176,76 @@ static void test_parse_array() {
     }
 }
 
+static void test_parse_object() {
+    xValue v;
+    size_t i;
+
+    {
+        xHelper h(&v);
+        EXPECT_EQ_INT(xState::X_PARSE_OK, xParse(&v, " { } "));
+        EXPECT_EQ_INT(xType::X_TYPE_OBJECT, h.xGetType(&v));
+        EXPECT_EQ_SIZE_T(0, h.xGetObjectSize(&v));
+    }
+    {
+    xHelper h(&v);
+    EXPECT_EQ_INT(xState::X_PARSE_OK, xParse(&v,
+        " { "
+        "\"n\" : null , "
+        "\"f\" : false , "
+        "\"t\" : true , "
+        "\"i\" : 123 , "
+        "\"s\" : \"abc\", "
+        "\"a\" : [ 1, 2, 3 ],"
+        "\"o\" : { \"1\" : 1, \"2\" : 2, \"3\" : 3 }"
+        " } "));
+    EXPECT_EQ_INT(xType::X_TYPE_OBJECT, h.xGetType(&v));
+    EXPECT_EQ_SIZE_T(7, h.xGetObjectSize(&v));
+    EXPECT_EQ_STRING("n", h.xGetObjectKey(&v, 0),
+        h.xGetObjectKeyLength(&v, 0));
+    EXPECT_EQ_INT(xType::X_TYPE_NULL,
+        h.xGetType(h.xGetObjectValue(&v, 0)));
+    EXPECT_EQ_STRING("f", h.xGetObjectKey(&v, 1),
+        h.xGetObjectKeyLength(&v, 1));
+    EXPECT_EQ_INT(xType::X_TYPE_FALSE,
+        h.xGetType(h.xGetObjectValue(&v, 1)));
+    EXPECT_EQ_STRING("t", h.xGetObjectKey(&v, 2),
+        h.xGetObjectKeyLength(&v, 2));
+    EXPECT_EQ_INT(xType::X_TYPE_TRUE,
+        h.xGetType(h.xGetObjectValue(&v, 2)));
+    EXPECT_EQ_STRING("i", h.xGetObjectKey(&v, 3),
+        h.xGetObjectKeyLength(&v, 3));
+    EXPECT_EQ_INT(xType::X_TYPE_NUMBER, h.xGetType(h.xGetObjectValue(&v, 3)));
+    EXPECT_EQ_DOUBLE(123.0, h.xGetNumber(h.xGetObjectValue(&v, 3)));
+    EXPECT_EQ_STRING("s", h.xGetObjectKey(&v, 4),
+        h.xGetObjectKeyLength(&v, 4));
+    EXPECT_EQ_INT(xType::X_TYPE_STRING, h.xGetType(h.xGetObjectValue(&v, 4)));
+    EXPECT_EQ_STRING("abc", h.xGetString(h.xGetObjectValue(&v, 4)),
+        h.xGetStringLength(h.xGetObjectValue(&v, 4)));
+    EXPECT_EQ_STRING("a", h.xGetObjectKey(&v, 5),
+        h.xGetObjectKeyLength(&v, 5));
+    EXPECT_EQ_INT(xType::X_TYPE_ARRAY, h.xGetType(h.xGetObjectValue(&v, 5)));
+    EXPECT_EQ_SIZE_T(3, h.xGetArraySize(h.xGetObjectValue(&v, 5)));
+    for (i = 0; i < 3; i++) {
+        xValue* e = h.xGetArrayElement(h.xGetObjectValue(&v, 5), i);
+        EXPECT_EQ_INT(xType::X_TYPE_NUMBER, h.xGetType(e));
+        EXPECT_EQ_DOUBLE(i + 1.0, h.xGetNumber(e));
+    }
+    EXPECT_EQ_STRING("o", h.xGetObjectKey(&v, 6),
+        h.xGetObjectKeyLength(&v, 6));
+    {
+        xValue* o = h.xGetObjectValue(&v, 6);
+        EXPECT_EQ_INT(xType::X_TYPE_OBJECT, h.xGetType(o));
+        for (i = 0; i < 3; i++) {
+            xValue* ov = h.xGetObjectValue(o, i);
+            EXPECT_TRUE('1' + i == h.xGetObjectKey(o, i)[0]);
+            EXPECT_EQ_SIZE_T(1, h.xGetObjectKeyLength(o, i));
+            EXPECT_EQ_INT(xType::X_TYPE_NUMBER, h.xGetType(ov));
+            EXPECT_EQ_DOUBLE(i + 1.0, h.xGetNumber(ov));
+        }
+    }
+    }
+}
+
 #define TEST_ERROR(error, json)\
     do {\
         xValue v;\
@@ -304,6 +374,30 @@ static void test_parse_miss_comma_or_square_bracket() {
     TEST_ERROR(xState::X_PARSE_MISS_COMMA_OR_SQUARE_BRACKET, "[[]");
 }
 
+static void test_parse_miss_key() {
+    TEST_ERROR(xState::X_PARSE_MISS_KEY, "{:1,");
+    TEST_ERROR(xState::X_PARSE_MISS_KEY, "{1:1,");
+    TEST_ERROR(xState::X_PARSE_MISS_KEY, "{true:1,");
+    TEST_ERROR(xState::X_PARSE_MISS_KEY, "{false:1,");
+    TEST_ERROR(xState::X_PARSE_MISS_KEY, "{null:1,");
+    TEST_ERROR(xState::X_PARSE_MISS_KEY, "{[]:1,");
+    TEST_ERROR(xState::X_PARSE_MISS_KEY, "{{}:1,");
+    TEST_ERROR(xState::X_PARSE_MISS_KEY, "{\"a\":1,");
+}
+
+static void test_parse_miss_colon() {
+    TEST_ERROR(xState::X_PARSE_MISS_COLON, "{\"a\"}");
+    TEST_ERROR(xState::X_PARSE_MISS_COLON, "{\"a\",\"b\"}");
+}
+
+static void test_parse_miss_comma_or_curly_bracket() {
+    TEST_ERROR(xState::X_PARSE_MISS_COMMA_OR_CURLY_BRACKET, "{\"a\":1");
+    TEST_ERROR(xState::X_PARSE_MISS_COMMA_OR_CURLY_BRACKET, "{\"a\":1]");
+    TEST_ERROR(xState::X_PARSE_MISS_COMMA_OR_CURLY_BRACKET, "{\"a\":1 \"b\"");
+    TEST_ERROR(xState::X_PARSE_MISS_COMMA_OR_CURLY_BRACKET, "{\"a\":{}");
+}
+
+
 static void test_parse() {
     test_parse_null();
     test_parse_true();
@@ -320,6 +414,11 @@ static void test_parse() {
     test_parse_invalid_unicode_hex();
     test_parse_invalid_unicode_surrogate();
     test_parse_miss_comma_or_square_bracket();
+
+    test_parse_miss_comma_or_square_bracket();
+    test_parse_miss_key();
+    test_parse_miss_colon();
+    test_parse_miss_comma_or_curly_bracket();
 
     test_access_null();
     test_access_boolean();
