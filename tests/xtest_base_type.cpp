@@ -67,6 +67,7 @@ static void test_parse_false() {
 #define TEST_NUMBER(expect, json)\
     do {\
         xValue v;\
+        xHelper h(&v);\
         EXPECT_EQ_INT(xState::X_PARSE_OK, xParse(&v, json));\
         EXPECT_EQ_INT(xType::X_TYPE_NUMBER, xHelper::xGetType(&v));\
         EXPECT_EQ_DOUBLE(expect, xHelper::xGetNumber(&v));\
@@ -116,6 +117,15 @@ static void test_parse_number() {
 static void test_parse_string() {
     TEST_STRING("", "\"\"");
     TEST_STRING("Hello", "\"Hello\"");
+
+    TEST_STRING("Hello\nWorld", "\"Hello\\nWorld\"");
+    TEST_STRING("\" \\ / \b \f \n \r \t", "\"\\\" \\\\ \\/ \\b \\f \\n \\r \\t\"");
+    TEST_STRING("Hello\0World", "\"Hello\\u0000World\"");
+    TEST_STRING("\x24", "\"\\u0024\"");         /* Dollar sign U+0024 */
+    TEST_STRING("\xC2\xA2", "\"\\u00A2\"");     /* Cents sign U+00A2 */
+    TEST_STRING("\xE2\x82\xAC", "\"\\u20AC\""); /* Euro sign U+20AC */
+    TEST_STRING("\xF0\x9D\x84\x9E", "\"\\uD834\\uDD1E\"");  /* G clef sign U+1D11E */
+    TEST_STRING("\xF0\x9D\x84\x9E", "\"\\ud834\\udd1e\"");  /* G clef sign U+1D11E */
 #if 0
     TEST_STRING("Hello\nWorld", "\"Hello\\nWorld\"");
     TEST_STRING("\" \\ / \b \f \n \r \t",
@@ -316,6 +326,22 @@ static void test_parse_invalid_string_char() {
 #endif
 }
 
+static void test_parse_invalid_unicode_hex() {
+    TEST_ERROR(xState::X_PARSE_INVALID_UNICODE_HEX, "\"\\u\"");
+    TEST_ERROR(xState::X_PARSE_INVALID_UNICODE_HEX, "\"\\u0\"");
+    TEST_ERROR(xState::X_PARSE_INVALID_UNICODE_HEX, "\"\\u01\"");
+    TEST_ERROR(xState::X_PARSE_INVALID_UNICODE_HEX, "\"\\u012\"");
+    TEST_ERROR(xState::X_PARSE_INVALID_UNICODE_HEX, "\"\\u/000\"");
+    TEST_ERROR(xState::X_PARSE_INVALID_UNICODE_HEX, "\"\\uG000\"");
+    TEST_ERROR(xState::X_PARSE_INVALID_UNICODE_HEX, "\"\\u0/00\"");
+    TEST_ERROR(xState::X_PARSE_INVALID_UNICODE_HEX, "\"\\u0G00\"");
+    TEST_ERROR(xState::X_PARSE_INVALID_UNICODE_HEX, "\"\\u00/0\"");
+    TEST_ERROR(xState::X_PARSE_INVALID_UNICODE_HEX, "\"\\u00G0\"");
+    TEST_ERROR(xState::X_PARSE_INVALID_UNICODE_HEX, "\"\\u000/\"");
+    TEST_ERROR(xState::X_PARSE_INVALID_UNICODE_HEX, "\"\\u000G\"");
+    TEST_ERROR(xState::X_PARSE_INVALID_UNICODE_HEX, "\"\\u 123\"");
+}
+
 static void test_access_null() {
     xValue v;
     xHelper helper(&v);
@@ -343,21 +369,7 @@ static void test_access_string() {
         xHelper::xGetStringLength(&v));
 }
 
-static void test_parse_invalid_unicode_hex() {
-    TEST_ERROR(xState::X_PARSE_INVALID_UNICODE_HEX, "\"\\u\"");
-    TEST_ERROR(xState::X_PARSE_INVALID_UNICODE_HEX, "\"\\u0\"");
-    TEST_ERROR(xState::X_PARSE_INVALID_UNICODE_HEX, "\"\\u01\"");
-    TEST_ERROR(xState::X_PARSE_INVALID_UNICODE_HEX, "\"\\u012\"");
-    TEST_ERROR(xState::X_PARSE_INVALID_UNICODE_HEX, "\"\\u/000\"");
-    TEST_ERROR(xState::X_PARSE_INVALID_UNICODE_HEX, "\"\\uG000\"");
-    TEST_ERROR(xState::X_PARSE_INVALID_UNICODE_HEX, "\"\\u0/00\"");
-    TEST_ERROR(xState::X_PARSE_INVALID_UNICODE_HEX, "\"\\u0G00\"");
-    TEST_ERROR(xState::X_PARSE_INVALID_UNICODE_HEX, "\"\\u00/0\"");
-    TEST_ERROR(xState::X_PARSE_INVALID_UNICODE_HEX, "\"\\u00G0\"");
-    TEST_ERROR(xState::X_PARSE_INVALID_UNICODE_HEX, "\"\\u000/\"");
-    TEST_ERROR(xState::X_PARSE_INVALID_UNICODE_HEX, "\"\\u000G\"");
-    TEST_ERROR(xState::X_PARSE_INVALID_UNICODE_HEX, "\"\\u 123\"");
-}
+
 
 static void test_parse_invalid_unicode_surrogate() {
     TEST_ERROR(xState::X_PARSE_INVALID_UNICODE_SURROGATE, "\"\\uD800\"");
@@ -404,6 +416,9 @@ static void test_parse() {
     test_parse_false();
     test_parse_number();
     test_parse_string();
+    test_parse_array();
+    test_parse_object();
+
     test_parse_expect_value();
     test_parse_invalid_value();
     test_parse_root_not_singular();
@@ -415,7 +430,6 @@ static void test_parse() {
     test_parse_invalid_unicode_surrogate();
     test_parse_miss_comma_or_square_bracket();
 
-    test_parse_miss_comma_or_square_bracket();
     test_parse_miss_key();
     test_parse_miss_colon();
     test_parse_miss_comma_or_curly_bracket();
@@ -426,8 +440,80 @@ static void test_parse() {
     test_access_string();
 }
 
+#define TEST_ROUNDTRIP(json)\
+    do {\
+        xValue v;\
+        char* json2;\
+        size_t length;\
+        xHelper h(&v);\
+        EXPECT_EQ_INT(xState::X_PARSE_OK, xParse(&v, json));\
+        json2 = xStringify(&v, &length);\
+        EXPECT_EQ_STRING(json, json2, length);\
+        free(json2);\
+    } while (0)
+
+static void test_stringify_number() {
+    TEST_ROUNDTRIP("0");
+    TEST_ROUNDTRIP("-0");
+    TEST_ROUNDTRIP("1");
+    TEST_ROUNDTRIP("-1");
+    TEST_ROUNDTRIP("1.5");
+    TEST_ROUNDTRIP("-1.5");
+    TEST_ROUNDTRIP("3.25");
+    TEST_ROUNDTRIP("1e+20");
+    TEST_ROUNDTRIP("1.234e+20");
+    TEST_ROUNDTRIP("1.234e-20");
+
+    TEST_ROUNDTRIP("1.0000000000000002"); /* the smallest number > 1 */
+    TEST_ROUNDTRIP("4.9406564584124654e-324"); /* minimum denormal */
+    TEST_ROUNDTRIP("-4.9406564584124654e-324");
+    TEST_ROUNDTRIP("2.2250738585072009e-308");  /* Max subnormal double */
+    TEST_ROUNDTRIP("-2.2250738585072009e-308");
+    TEST_ROUNDTRIP("2.2250738585072014e-308");  /* Min normal positive double */
+    TEST_ROUNDTRIP("-2.2250738585072014e-308");
+    TEST_ROUNDTRIP("1.7976931348623157e+308");  /* Max double */
+    TEST_ROUNDTRIP("-1.7976931348623157e+308");
+}
+
+static void test_stringify_string() {
+    TEST_ROUNDTRIP("\"\"");
+    TEST_ROUNDTRIP("\"Hello\"");
+    TEST_ROUNDTRIP("\"Hello\\nWorld\"");
+    TEST_ROUNDTRIP("\"\\\" \\\\ / \\b \\f \\n \\r \\t\"");
+    TEST_ROUNDTRIP("\"Hello\\u0000World\"");
+}
+
+static void test_stringify_array() {
+    TEST_ROUNDTRIP("[]");
+    TEST_ROUNDTRIP("[null,false,true,123,\"abc\",[1,2,3]]");
+}
+
+static void test_stringify_object() {
+    TEST_ROUNDTRIP("{}");
+    TEST_ROUNDTRIP("{\"n\":null,\"f\":false,\"t\":true,\"i\":123,\"s\":\"abc\",\"a\":[1,2,3],\"o\":{\"1\":1,\"2\":2,\"3\":3}}");
+}
+
+static void test_stringify() {
+    TEST_ROUNDTRIP("null");
+    TEST_ROUNDTRIP("false");
+    TEST_ROUNDTRIP("true");
+    test_stringify_number();
+    test_stringify_string();
+    test_stringify_array();
+    test_stringify_object();
+}
+
+static void test_access() {
+    test_access_null();
+    test_access_boolean();
+    test_access_number();
+    test_access_string();
+}
+
 int main() {
     test_parse();
+    test_stringify();
+    test_access();
     printf("%d/%d (%3.2f%%) passed\n",
         test_pass, test_count, test_pass  * 100.0 / test_count);
     return main_ret;

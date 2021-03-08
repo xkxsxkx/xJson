@@ -298,7 +298,7 @@ class xParse {
                 parseWhiteSpace(c);
             } else if (*c->json == ']') {
                 c->json++;
-                v->type == xType::X_TYPE_ARRAY;
+                v->type = xType::X_TYPE_ARRAY;
                 v->array.len = size;
                 size *= sizeof(xValue);
                 memcpy(v->array.e = (xValue*)malloc(size),
